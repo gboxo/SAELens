@@ -23,7 +23,7 @@ from sae_lens.toolkit.pretrained_saes_directory import get_pretrained_saes_direc
 from sae_lens.training.activation_functions import get_activation_fn
 from sae_lens.training.config import LanguageModelSAERunnerConfig
 from sae_lens.training.utils import BackwardsCompatiblePickleClass
-
+from sae_lens.training.vae_utils import 
 SPARSITY_PATH = "sparsity.safetensors"
 SAE_WEIGHTS_PATH = "sae_weights.safetensors"
 SAE_CFG_PATH = "cfg.json"
@@ -86,6 +86,14 @@ class SparseAutoencoder(HookedRootModule):
         self.hook_point_layer = cfg.hook_point_layer
         self.noise_scale = cfg.noise_scale
         self.activation_fn = get_activation_fn(cfg.activation_fn)
+        
+        # VAE stuff
+        self.is_vae = cfg.is_vae:
+            self.vae_type = cfg.vae_type
+            self.prior_sc = cfg.prior_sc
+            self.beta = cfg.beta
+            self.l1_penalty = cfg.l1_penalty
+        
 
         if self.cfg.scale_sparsity_penalty_by_decoder_norm:
             self.get_sparsity_loss_term = self.get_sparsity_loss_term_decoder_norm
@@ -162,6 +170,30 @@ class SparseAutoencoder(HookedRootModule):
         self.scaling_factor = nn.Parameter(
             torch.ones(self.d_sae, dtype=self.dtype, device=self.device)
         )
+        
+        
+        
+        
+        
+        
+        # If we are using Variational Autoencoder
+        if self.is_vae:
+            if self.vae_type == "VanillaVAE": # Gaussian
+                self.fc_mu = nn.Parameter(
+                    nn.init.kaiming_uniform_(torch.empty(d_sae,d_sae,dtype = cfg.dtype, device = cfg.device))
+
+                )
+
+                self.fc_logvar = nn.Parameter(
+                    nn.init.kaiming_uniform_(torch.empty(d_sae,d_sae,dtype = cfg.dtype, device = cfg.device))
+
+                )
+                self.hook_vae_mu = HookPoint()
+                self.hook_vae_logvar = HookPoint()
+
+            self.grad_cache = {}
+        
+        
 
     def encode(
         self, x: Float[torch.Tensor, "... d_in"]
@@ -194,6 +226,33 @@ class SparseAutoencoder(HookedRootModule):
         feature_acts = self.hook_hidden_post(self.activation_fn(noisy_hidden_pre))
 
         return feature_acts, hidden_pre
+    
+    
+    # Define a function to estimate the parameters from the distribution we will sample from
+    
+    def recognition_module(
+        self,
+        h: Float[torch.Tensor, "... d_sae"]
+    ): # This needs to be type checked (how can I do it to support all experiments)
+        """Uses the encoded input to get the parameters of the latent distribution"""
+        assert self.is_vae, "The recognition module can only be used for vae's"
+        if self.vae_type == "VanillaVAE":
+            mu = self.hook_vae_mu(
+                einops.einsum(h,self.fc_mu,
+                        "... d_vae, d_vae d_vae -> ... d_vae"
+
+                    )
+               )
+
+            log_var = self.hook_vae_logvar(
+                    einops.einsum(h,self.fc_logvar,
+                            "... d_vae, d_vae d_vae -> ... d_vae"
+                                
+                        )
+                )
+            
+        return (mu, log_var)
+        
 
     def decode(
         self, feature_acts: Float[torch.Tensor, "... d_sae"]

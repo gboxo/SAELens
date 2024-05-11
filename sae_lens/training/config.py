@@ -58,6 +58,13 @@ class LanguageModelSAERunnerConfig:
     store_batch_size: int = 32
     train_batch_size: int = 4096
     normalize_activations: bool = False
+    
+    # VAE stuff
+    is_vae: Optional[bool] = None
+    vae_type: Optional[str] = "VanillaVAE" # VanillaVAE, bVAE, sc_VAE
+    prior_sc: Optional[str] = "gaussian" # gaussian / Dirac Delta / Cauchy / Laplace  
+    beta: Optional[float] = 1
+    l1_penalty: Optional[bool] = True
 
     # Misc
     device: str | torch.device = "cpu"
@@ -138,6 +145,14 @@ class LanguageModelSAERunnerConfig:
     sae_lens_training_version: str = field(default_factory=lambda: __version__)
 
     def __post_init__(self):
+        # VAE stuff
+        if self.is_vae:
+            assert self.vae_type is not None, "The VAE architecture needs to be specified"
+            assert self.prior_sc is not None, "The VAE architecture needs to be specified"
+            assert self.beta is not None, "The VAE architecture needs to know the hyperparmater for the KL"
+            assert self.l1_penalty is not None, "The VAE architecture needs to know if use L1 on the latent"
+        
+        
         if self.use_cached_activations and self.cached_activations_path is None:
             self.cached_activations_path = _default_cached_activations_path(
                 self.dataset_path,
@@ -154,6 +169,15 @@ class LanguageModelSAERunnerConfig:
 
         if self.run_name is None:
             self.run_name = f"{self.d_sae}-L1-{self.l1_coefficient}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
+
+        if self.is_vae:
+            if self.l1_penalty:
+                self.run_name = f"{self.beta}-beta-{self.d_sae}-L1-{self.l1_coefficient}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
+            else:
+                self.run_name = f"{self.beta}--{self.d_sae}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
+
+
+
 
         if self.b_dec_init_method not in ["geometric_median", "mean", "zeros"]:
             raise ValueError(
@@ -198,9 +222,19 @@ class LanguageModelSAERunnerConfig:
         self.checkpoint_path = f"{self.checkpoint_path}/{unique_id}"
 
         if self.verbose:
-            print(
-                f"Run name: {self.d_sae}-L1-{self.l1_coefficient}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
-            )
+            if self.is_vae:
+                if self.l1_penalty:
+                    print(
+                    f"Run name: {self.d_sae}-beta-{self.beta}-L1-{self.l1_coefficient}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
+                    )
+                else:
+                    print(
+                    f"Run name: {self.d_sae}-beta-{self.beta}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
+                    )
+            else:
+                print(
+                    f"Run name: {self.d_sae}-L1-{self.l1_coefficient}-LR-{self.lr}-Tokens-{self.training_tokens:3.3e}"
+                )
             # Print out some useful info:
             n_tokens_per_buffer = (
                 self.store_batch_size * self.context_size * self.n_batches_in_buffer
